@@ -1,7 +1,16 @@
 require('dotenv').config();
 
+const http = require('http');
+
 const { Client, GatewayIntentBits } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, entersState, VoiceConnectionStatus } = require('@discordjs/voice');
+const {
+  joinVoiceChannel,
+  createAudioPlayer,
+  createAudioResource,
+  AudioPlayerStatus,
+  entersState,
+  VoiceConnectionStatus,
+} = require('@discordjs/voice');
 
 const { createSongPoller } = require('./songUpdater');
 
@@ -16,6 +25,22 @@ if (!process.env.DISCORD_TOKEN) {
 if (!RADIO_STREAM_URL) {
   throw new Error('Missing RADIO_STREAM_URL in .env (direct audio stream URL)');
 }
+
+// Render “Web Service” health/port binding
+// Your Discord bot does not need HTTP, but Render requires a bound port for Web Service.
+const PORT = process.env.PORT ? Number(process.env.PORT) : 8080;
+const server = http.createServer((req, res) => {
+  if (req.url === '/health' || req.url === '/' || req.url === undefined) {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    return res.end('OK');
+  }
+  res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+  return res.end('Not Found');
+});
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`HTTP server listening on port ${PORT}`);
+});
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
