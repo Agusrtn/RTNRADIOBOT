@@ -18,6 +18,7 @@ function createSongPoller({ endpoint, pollMs = DEFAULT_POLL_MS, onSongChange, on
   let stopped = false;
 
   async function fetchSong() {
+    console.log('[songPoller] fetching from', endpoint);
     const res = await fetch(endpoint, {
       headers: {
         Accept: 'application/json',
@@ -29,6 +30,7 @@ function createSongPoller({ endpoint, pollMs = DEFAULT_POLL_MS, onSongChange, on
     }
 
     const data = await res.json();
+    console.log('[songPoller] fetched data:', data && typeof data === 'object' ? JSON.stringify(data).slice(0, 1000) : String(data));
 
     // Guardamos el objeto completo por si el backend ya incluye audioUrl.
     const obj = data?.station?.currentSong ?? data?.currentSong ?? data?.current_song ?? data;
@@ -74,11 +76,13 @@ function createSongPoller({ endpoint, pollMs = DEFAULT_POLL_MS, onSongChange, on
       const audioChanged = info.audioUrl && info.audioUrl !== lastAudioUrl;
 
       if (titleChanged || audioChanged) {
+        console.log('[songPoller] change detected. titleChanged:', titleChanged, 'audioChanged:', audioChanged);
         lastSongTitle = info.title;
         lastAudioUrl = info.audioUrl;
         onSongChange(info);
       }
     } catch (e) {
+      console.warn('[songPoller] fetch error', e?.message || e);
       if (onError) onError(e);
       // Keep polling even if the API fails.
     } finally {

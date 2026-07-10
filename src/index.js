@@ -74,6 +74,10 @@ async function ensureConnected(voiceChannel) {
 
   try {
     await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+    console.log(`[voice] connected to ${voiceChannel.name} (${voiceChannel.id}) in guild ${voiceChannel.guild.id}`);
+    connection.on(VoiceConnectionStatus.Disconnected, (oldState, newState) => {
+      console.warn('[voice] connection disconnected, attempting recovery');
+    });
   } catch (e) {
     connection.destroy();
     throw e;
@@ -88,11 +92,22 @@ function setCurrentConnection(connection, voiceChannel) {
 }
 
 player.on(AudioPlayerStatus.Playing, () => {
-  // console.log('Now playing');
+  console.log('[player] status: Playing');
+});
+player.on(AudioPlayerStatus.Idle, () => {
+  console.log('[player] status: Idle');
+});
+
+player.on(AudioPlayerStatus.Buffering, () => {
+  console.log('[player] status: Buffering');
+});
+
+player.on(AudioPlayerStatus.Paused, () => {
+  console.log('[player] status: Paused');
 });
 
 player.on('error', (err) => {
-  // console.error('Audio player error:', err);
+  console.error('[player] error:', err?.message || err, err?.stack || 'no stack');
 });
 
 client.once('ready', () => {
@@ -148,6 +163,7 @@ client.on('interactionCreate', async (interaction) => {
       })();
 
       console.log('[play] using streamUrl:', streamUrl);
+      console.log('[play] streamResourceOptions:', streamResourceOptions);
 
       // Reintentos/reconexión ayudan cuando el stream corta o responde mal al inicio.
       const streamResourceOptions = {
@@ -160,9 +176,14 @@ client.on('interactionCreate', async (interaction) => {
         ],
       };
 
-      const resource = createAudioResource(streamUrl, streamResourceOptions);
-      player.play(resource);
-      currentPlayingUrl = streamUrl;
+      try {
+        const resource = createAudioResource(streamUrl, streamResourceOptions);
+        player.play(resource);
+        currentPlayingUrl = streamUrl;
+      } catch (e) {
+        console.error('[play] createAudioResource/play failed for', streamUrl, e?.message || e);
+        throw e;
+      }
 
       // Poll CURRENT SONG every SONG_POLL_MS and only update when it changes.
       if (!songPoller) {
@@ -170,6 +191,7 @@ client.on('interactionCreate', async (interaction) => {
           endpoint: RADIO_CURRENT_SONG_ENDPOINT,
           pollMs: SONG_POLL_MS,
           onSongChange: async (info) => {
+            console.log('[songPoller] onSongChange:', info);
             // info: { title, audioUrl, object }
             if (!info) return;
 
@@ -180,9 +202,10 @@ client.on('interactionCreate', async (interaction) => {
             try {
               if (client.user && title) {
                 client.user.setPresence({ activities: [{ name: title, type: ActivityType.Listening }], status: 'online' });
+                console.log('[presence] set to:', title);
               }
             } catch (e) {
-              // ignore
+              console.warn('[presence] setPresence failed', e?.message || e);
             }
 
             // Update text channel message
@@ -197,19 +220,25 @@ client.on('interactionCreate', async (interaction) => {
                 currentSongMessage = await textChannel.send({ content });
               }
             } catch (e) {
-              // Avoid crashing if Discord edit/send fails.
+              console.warn('[songPoller] update message failed', e?.message || e);
             }
 
             // If the backend provided an audio URL and it's different, switch playback
             try {
               const url = info.audioUrl || info.object?.audioUrl || info.object?.audio_url || info.object?.url || info.object?.streamUrl || null;
+              console.log('[songPoller] detected audioUrl:', url, 'currentPlayingUrl:', currentPlayingUrl);
               if (url && url !== currentPlayingUrl) {
-                const newRes = createAudioResource(url, streamResourceOptions);
-                player.play(newRes);
-                currentPlayingUrl = url;
+                try {
+                  const newRes = createAudioResource(url, streamResourceOptions);
+                  player.play(newRes);
+                  currentPlayingUrl = url;
+                  console.log('[play] switched to new audioUrl');
+                } catch (e) {
+                  console.error('[play] failed switching to new audioUrl', e?.message || e);
+                }
               }
             } catch (e) {
-              // ignore playback switch errors
+              console.warn('[songPoller] playback switch check failed', e?.message || e);
             }
           },
           onError: () => {
@@ -255,10 +284,12 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     if (oldState.channel && !newState.channel) {
       const voiceChannel = oldState.channel;
       try {
+        console.log('[voiceStateUpdate] bot was removed from channel, attempting rejoin to', voiceChannel.name);
         const connection = await ensureConnected(voiceChannel);
         connection.subscribe(player);
         setCurrentConnection(connection, voiceChannel);
       } catch (e) {
+        console.warn('[voiceStateUpdate] rejoin failed', e?.message || e);
         // ignore
       }
     }
