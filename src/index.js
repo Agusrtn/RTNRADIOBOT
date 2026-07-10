@@ -58,6 +58,11 @@ let currentVoiceChannel = null;
 let currentVoiceConnection = null;
 let currentPlayingUrl = null;
 
+// small helper
+function sleep(ms) {
+  return new Promise((res) => setTimeout(res, ms));
+}
+
 function getNextUserVoiceChannel(interaction) {
   const member = interaction.member;
   if (!member || !member.voice || !member.voice.channel) return null;
@@ -79,6 +84,7 @@ async function ensureConnected(voiceChannel) {
       console.warn('[voice] connection disconnected, attempting recovery');
     });
   } catch (e) {
+    console.error('[voice] ensureConnected failed:', e?.message || e, e?.stack || 'no stack');
     connection.destroy();
     throw e;
   }
@@ -283,18 +289,35 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     // Bot was in a channel and now is not -> try to rejoin
     if (oldState.channel && !newState.channel) {
       const voiceChannel = oldState.channel;
-      try {
-        console.log('[voiceStateUpdate] bot was removed from channel, attempting rejoin to', voiceChannel.name);
-        const connection = await ensureConnected(voiceChannel);
-        connection.subscribe(player);
-        setCurrentConnection(connection, voiceChannel);
-      } catch (e) {
-        console.warn('[voiceStateUpdate] rejoin failed', e?.message || e);
-        // ignore
+      // Try a few times with exponential backoff
+      const maxAttempts = 4;
+      let attempt = 0;
+      while (attempt < maxAttempts) {
+        attempt += 1;
+        try {
+          console.log('[voiceStateUpdate] attempt', attempt, 'to rejoin', voiceChannel.name);
+          const connection = await ensureConnected(voiceChannel);
+          connection.subscribe(player);
+          setCurrentConnection(connection, voiceChannel);
+          console.log('[voiceStateUpdate] rejoin successful on attempt', attempt);
+          break;
+        } catch (e) {
+          console.warn('[voiceStateUpdate] rejoin attempt', attempt, 'failed:', e?.message || e);
+          console.warn(e?.stack || 'no stack');
+          if (attempt >= maxAttempts) {
+            console.error('[voiceStateUpdate] all rejoin attempts failed');
+            break;
+          }
+          // backoff: 2s, 4s, 8s...
+          const wait = 2000 * Math.pow(2, attempt - 1);
+          console.log('[voiceStateUpdate] waiting', wait, 'ms before next attempt');
+          // eslint-disable-next-line no-await-in-loop
+          await sleep(wait);
+        }
       }
     }
   } catch (e) {
-    // ignore
+    console.error('[voiceStateUpdate] unexpected error', e?.message || e, e?.stack || 'no stack');
   }
 });
 
