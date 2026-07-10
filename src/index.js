@@ -105,13 +105,14 @@ client.on('interactionCreate', async (interaction) => {
       const connection = await ensureConnected(voiceChannel);
       connection.subscribe(player);
 
-      const resourceOptions = {};
+      const resourceOptions = {
+        inlineVolume: true,
+      };
+
       if (RADIO_STREAM_USER_AGENT) {
         resourceOptions.inputArgs = ['-headers', `User-Agent: ${RADIO_STREAM_USER_AGENT}\r\n`];
       }
 
-      // Render a veces aborta al intentar decodificar.
-      // Si falla, intentamos otra configuración y además logueamos para saber el motivo.
       const streamUrl = (() => {
         try {
           const override = RADIO_PLAYBACK_URL_OVERRIDE;
@@ -119,9 +120,8 @@ client.on('interactionCreate', async (interaction) => {
 
           const s = songPoller?.getLastSongObject?.();
 
-          // Backends sometimes return different keys.
-          // Si tu backend entrega algo tipo audioUrl, eso es lo que usaremos.
-          // Si no, fallback a RADIO_STREAM_URL.
+          // Preferimos audioUrl del endpoint /radio (cambia por canción).
+          // Si el campo no existe, usamos fallback.
           return (
             s?.audioUrl ||
             s?.audio_url ||
@@ -134,22 +134,21 @@ client.on('interactionCreate', async (interaction) => {
         }
       })();
 
-      let resource;
-      try {
-        resource = createAudioResource(streamUrl, resourceOptions);
-      } catch (e) {
-        try {
-          resourceOptions.inlineVolume = true;
-          resource = createAudioResource(streamUrl, resourceOptions);
-        } catch (e2) {
-          console.error('createAudioResource aborted:', e?.message || e, '| second try:', e2?.message || e2);
-          throw e2;
-        }
-      }
+      console.log('[play] using streamUrl:', streamUrl);
+
+      // Reintentos/reconexión ayudan cuando el stream corta o responde mal al inicio.
+      const streamResourceOptions = {
+        ...resourceOptions,
+        inputArgs: [
+          ...(resourceOptions.inputArgs || []),
+          '-reconnect', '1',
+          '-reconnect_streamed', '1',
+          '-reconnect_delay_max', '5',
+        ],
+      };
+
+      const resource = createAudioResource(streamUrl, streamResourceOptions);
       player.play(resource);
-
-
-
 
       // Poll CURRENT SONG every SONG_POLL_MS and only update when it changes.
       if (!songPoller) {
