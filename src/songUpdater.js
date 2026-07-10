@@ -12,7 +12,9 @@ const DEFAULT_POLL_MS = 2000;
  */
 function createSongPoller({ endpoint, pollMs = DEFAULT_POLL_MS, onSongChange, onError }) {
   let lastSong = null;
+
   let timer = null;
+  let lastSongObject = null;
   let stopped = false;
 
   async function fetchSong() {
@@ -28,8 +30,17 @@ function createSongPoller({ endpoint, pollMs = DEFAULT_POLL_MS, onSongChange, on
 
     const data = await res.json();
 
-    // Try common keys.
+    // Guardamos el objeto completo por si el backend ya incluye audioUrl.
+    lastSongObject = data?.station?.currentSong ?? data?.currentSong ?? data?.current_song ?? data;
+
+    // Intentamos sacar un string “title/nombre” para comparar.
     const candidate =
+      data?.station?.currentSong?.title ??
+      data?.station?.currentSong?.song ??
+      data?.station?.currentSong?.name ??
+      data?.currentSong?.title ??
+      data?.currentSong?.song ??
+      data?.currentSong?.name ??
       data?.currentSong ??
       data?.current_song ??
       data?.song ??
@@ -75,7 +86,12 @@ function createSongPoller({ endpoint, pollMs = DEFAULT_POLL_MS, onSongChange, on
     timer = null;
   }
 
-  return { start, stop, getLastSong: () => lastSong };
+  return {
+    start,
+    stop,
+    getLastSong: () => lastSong,
+    getLastSongObject: () => lastSongObject,
+  };
 }
 
 module.exports = { createSongPoller };

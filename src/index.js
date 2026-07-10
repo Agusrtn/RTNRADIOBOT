@@ -110,19 +110,29 @@ client.on('interactionCreate', async (interaction) => {
 
       // Render a veces aborta al intentar decodificar.
       // Si falla, intentamos otra configuración y además logueamos para saber el motivo.
+      const streamUrl = (() => {
+        try {
+          const s = songPoller?.getLastSongObject?.();
+          return s?.audioUrl || RADIO_STREAM_URL;
+        } catch {
+          return RADIO_STREAM_URL;
+        }
+      })();
+
       let resource;
       try {
-        resource = createAudioResource(RADIO_STREAM_URL, resourceOptions);
+        resource = createAudioResource(streamUrl, resourceOptions);
       } catch (e) {
         try {
           resourceOptions.inlineVolume = true;
-          resource = createAudioResource(RADIO_STREAM_URL, resourceOptions);
+          resource = createAudioResource(streamUrl, resourceOptions);
         } catch (e2) {
           console.error('createAudioResource aborted:', e?.message || e, '| second try:', e2?.message || e2);
           throw e2;
         }
       }
       player.play(resource);
+
 
 
 
