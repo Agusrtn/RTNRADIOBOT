@@ -11,16 +11,16 @@ const DEFAULT_POLL_MS = 2000;
  * @param {() => void} [params.onError]
  */
 function createSongPoller({ endpoint, pollMs = DEFAULT_POLL_MS, onSongChange, onError }) {
-  let lastSong = null;
-
   let timer = null;
   let lastSongObject = null;
+  let lastSongTitle = null;
+  let lastAudioUrl = null;
   let stopped = false;
 
   async function fetchSong() {
     const res = await fetch(endpoint, {
       headers: {
-        'Accept': 'application/json',
+        Accept: 'application/json',
       },
     });
 
@@ -31,18 +31,14 @@ function createSongPoller({ endpoint, pollMs = DEFAULT_POLL_MS, onSongChange, on
     const data = await res.json();
 
     // Guardamos el objeto completo por si el backend ya incluye audioUrl.
-    lastSongObject = data?.station?.currentSong ?? data?.currentSong ?? data?.current_song ?? data;
+    const obj = data?.station?.currentSong ?? data?.currentSong ?? data?.current_song ?? data;
+    lastSongObject = obj;
 
     // Intentamos sacar un string “title/nombre” para comparar.
     const candidate =
-      data?.station?.currentSong?.title ??
-      data?.station?.currentSong?.song ??
-      data?.station?.currentSong?.name ??
-      data?.currentSong?.title ??
-      data?.currentSong?.song ??
-      data?.currentSong?.name ??
-      data?.currentSong ??
-      data?.current_song ??
+      obj?.title ??
+      obj?.song ??
+      obj?.name ??
       data?.song ??
       data?.title ??
       data?.track ??
@@ -50,22 +46,40 @@ function createSongPoller({ endpoint, pollMs = DEFAULT_POLL_MS, onSongChange, on
       data?.now_playing ??
       null;
 
-    const normalized = typeof candidate === 'string' ? candidate.trim() : (candidate == null ? null : String(candidate));
+    const normalizedTitle = typeof candidate === 'string' ? candidate.trim() : (candidate == null ? null : String(candidate));
 
-    return normalized || null;
+    // Intentamos obtener la URL de audio desde campos comunes.
+    const audioUrl =
+      obj?.audioUrl ??
+      obj?.audio_url ??
+      obj?.url ??
+      obj?.streamUrl ??
+      obj?.stream_url ??
+      data?.audioUrl ??
+      data?.audio_url ??
+      data?.url ??
+      data?.streamUrl ??
+      null;
+
+    return { title: normalizedTitle || null, audioUrl: audioUrl || null, object: lastSongObject };
   }
 
   async function tick() {
     if (stopped) return;
 
     try {
-      const song = await fetchSong();
-      if (song && song !== lastSong) {
-        lastSong = song;
-        onSongChange(song);
+      const info = await fetchSong();
+
+      const titleChanged = info.title && info.title !== lastSongTitle;
+      const audioChanged = info.audioUrl && info.audioUrl !== lastAudioUrl;
+
+      if (titleChanged || audioChanged) {
+        lastSongTitle = info.title;
+        lastAudioUrl = info.audioUrl;
+        onSongChange(info);
       }
     } catch (e) {
-      if (onError) onError();
+      if (onError) onError(e);
       // Keep polling even if the API fails.
     } finally {
       if (!stopped) {
@@ -89,7 +103,7 @@ function createSongPoller({ endpoint, pollMs = DEFAULT_POLL_MS, onSongChange, on
   return {
     start,
     stop,
-    getLastSong: () => lastSong,
+    getLastSong: () => lastSongTitle,
     getLastSongObject: () => lastSongObject,
   };
 }

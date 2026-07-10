@@ -2,7 +2,7 @@ require('dotenv').config();
 
 const http = require('http');
 
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, ActivityType } = require('discord.js');
 const {
   joinVoiceChannel,
   createAudioPlayer,
@@ -54,6 +54,9 @@ let currentSongMessage = null;
 let currentSongMessageChannel = null;
 let songPoller = null;
 let lastSong = null;
+let currentVoiceChannel = null;
+let currentVoiceConnection = null;
+let currentPlayingUrl = null;
 
 function getNextUserVoiceChannel(interaction) {
   const member = interaction.member;
@@ -77,6 +80,11 @@ async function ensureConnected(voiceChannel) {
   }
 
   return connection;
+}
+
+function setCurrentConnection(connection, voiceChannel) {
+  currentVoiceConnection = connection;
+  currentVoiceChannel = voiceChannel;
 }
 
 player.on(AudioPlayerStatus.Playing, () => {
@@ -103,7 +111,8 @@ client.on('interactionCreate', async (interaction) => {
     await interaction.deferReply();
     try {
       const connection = await ensureConnected(voiceChannel);
-      connection.subscribe(player);
+    connection.subscribe(player);
+    setCurrentConnection(connection, voiceChannel);
 
       const resourceOptions = {
         inlineVolume: true,
@@ -153,28 +162,54 @@ client.on('interactionCreate', async (interaction) => {
 
       const resource = createAudioResource(streamUrl, streamResourceOptions);
       player.play(resource);
+      currentPlayingUrl = streamUrl;
 
       // Poll CURRENT SONG every SONG_POLL_MS and only update when it changes.
       if (!songPoller) {
         songPoller = createSongPoller({
           endpoint: RADIO_CURRENT_SONG_ENDPOINT,
           pollMs: SONG_POLL_MS,
-          onSongChange: async (song) => {
-            if (!song || song === lastSong) return;
-            lastSong = song;
+          onSongChange: async (info) => {
+            // info: { title, audioUrl, object }
+            if (!info) return;
 
-            const textChannel = interaction.channel;
-            const content = `🎵 **Current song:** ${song}`;
+            // Build a readable title
+            const title = info.title || info.object?.title || info.object?.song || info.object?.name || String(info.object || '');
 
+            // Update presence
             try {
+              if (client.user && title) {
+                client.user.setPresence({ activities: [{ name: title, type: ActivityType.Listening }], status: 'online' });
+              }
+            } catch (e) {
+              // ignore
+            }
+
+            // Update text channel message
+            try {
+              const textChannel = interaction.channel;
+              const content = `🎵 **Current song:** ${title}`;
+
               if (currentSongMessage && currentSongMessageChannel?.id === textChannel?.id) {
                 await currentSongMessage.edit({ content });
               } else {
                 currentSongMessageChannel = textChannel;
                 currentSongMessage = await textChannel.send({ content });
               }
-            } catch {
+            } catch (e) {
               // Avoid crashing if Discord edit/send fails.
+            }
+
+            // If the backend provided an audio URL and it's different, switch playback
+            try {
+              const url = info.audioUrl || info.object?.audioUrl || info.object?.audio_url || info.object?.url || info.object?.streamUrl || null;
+              if (url && url !== currentPlayingUrl) {
+                const newRes = createAudioResource(url, streamResourceOptions);
+                player.play(newRes);
+                currentPlayingUrl = url;
+              }
+            } catch (e) {
+              // ignore playback switch errors
             }
           },
           onError: () => {
@@ -207,6 +242,28 @@ client.on('interactionCreate', async (interaction) => {
     } catch (e) {
       return interaction.editReply({ content: `Error deteniendo: ${e?.message || e}` });
     }
+  }
+});
+
+// If the bot is removed from the voice channel, try to rejoin it.
+client.on('voiceStateUpdate', async (oldState, newState) => {
+  try {
+    if (!oldState || !oldState.member) return;
+    if (oldState.member.id !== client.user.id) return;
+
+    // Bot was in a channel and now is not -> try to rejoin
+    if (oldState.channel && !newState.channel) {
+      const voiceChannel = oldState.channel;
+      try {
+        const connection = await ensureConnected(voiceChannel);
+        connection.subscribe(player);
+        setCurrentConnection(connection, voiceChannel);
+      } catch (e) {
+        // ignore
+      }
+    }
+  } catch (e) {
+    // ignore
   }
 });
 
