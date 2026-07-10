@@ -110,23 +110,33 @@ async function ensureConnected(voiceChannel) {
       return connection;
     } catch (e) {
       console.error('[voice] ensureConnected failed on first try:', e?.message || e, e?.stack || 'no stack');
-      try { connection.destroy(); } catch (er) {}
-      // Try one more time
       try {
-        console.log('[voice] retrying join once more');
-        const conn2 = joinVoiceChannel({
-          channelId: voiceChannel.id,
-          guildId: voiceChannel.guild.id,
-          adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-          selfDeaf: true,
-        });
-        await entersState(conn2, VoiceConnectionStatus.Ready, 30_000);
-        console.log('[voice] connected on retry');
-        return conn2;
-      } catch (err2) {
-        console.error('[voice] retry failed:', err2?.message || err2, err2?.stack || 'no stack');
-        try { conn2?.destroy(); } catch (er) {}
-        throw err2;
+        if (connection && typeof connection.destroy === 'function') connection.destroy();
+      } catch (er) {
+        console.warn('[voice] destroy failed (ignored):', er?.message || er);
+      }
+      // Try one more time after a short wait
+      try {
+        console.log('[voice] retrying join once more after 3s');
+        await sleep(3000);
+        let conn2 = null;
+        try {
+          conn2 = joinVoiceChannel({
+            channelId: voiceChannel.id,
+            guildId: voiceChannel.guild.id,
+            adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+            selfDeaf: true,
+          });
+          await entersState(conn2, VoiceConnectionStatus.Ready, 30_000);
+          console.log('[voice] connected on retry');
+          return conn2;
+        } catch (err2) {
+          console.error('[voice] retry failed:', err2?.message || err2, err2?.stack || 'no stack');
+          try { if (conn2 && typeof conn2.destroy === 'function') conn2.destroy(); } catch (er) { console.warn('[voice] destroy failed (ignored):', er?.message || er); }
+          throw err2;
+        }
+      } catch (finalErr) {
+        throw finalErr;
       }
     }
   } catch (e) {
