@@ -2,7 +2,7 @@ require('dotenv').config();
 
 const http = require('http');
 
-const { Client, GatewayIntentBits, ActivityType } = require('discord.js');
+const { Client, GatewayIntentBits, ActivityType, PermissionsBitField } = require('discord.js');
 const {
   joinVoiceChannel,
   createAudioPlayer,
@@ -10,6 +10,7 @@ const {
   AudioPlayerStatus,
   entersState,
   VoiceConnectionStatus,
+  getVoiceConnection,
 } = require('@discordjs/voice');
 
 const { createSongPoller } = require('./songUpdater');
@@ -70,26 +71,68 @@ function getNextUserVoiceChannel(interaction) {
 }
 
 async function ensureConnected(voiceChannel) {
-  const connection = joinVoiceChannel({
-    channelId: voiceChannel.id,
-    guildId: voiceChannel.guild.id,
-    adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-    selfDeaf: true,
-  });
-
+  // Reuse existing connection if present
   try {
-    await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
-    console.log(`[voice] connected to ${voiceChannel.name} (${voiceChannel.id}) in guild ${voiceChannel.guild.id}`);
-    connection.on(VoiceConnectionStatus.Disconnected, (oldState, newState) => {
-      console.warn('[voice] connection disconnected, attempting recovery');
+    const existing = getVoiceConnection(voiceChannel.guild.id);
+    if (existing) {
+      try {
+        console.log('[voice] found existing connection, waiting for Ready');
+        await entersState(existing, VoiceConnectionStatus.Ready, 5_000);
+        return existing;
+      } catch (err) {
+        console.warn('[voice] existing connection not ready, destroying and recreating');
+        try { existing.destroy(); } catch (e) {}
+      }
+    }
+
+    // Check permissions before attempting to join
+    const perms = voiceChannel.permissionsFor ? voiceChannel.permissionsFor(client.user) : null;
+    if (!perms || !perms.has(PermissionsBitField.Flags.Connect)) {
+      const msg = 'Missing Connect permission for bot in channel';
+      console.error('[voice] permission check failed:', msg);
+      throw new Error(msg);
+    }
+
+    const connection = joinVoiceChannel({
+      channelId: voiceChannel.id,
+      guildId: voiceChannel.guild.id,
+      adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+      selfDeaf: true,
     });
+
+    try {
+      // Wait longer and allow an initial reconnect attempt
+      await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+      console.log(`[voice] connected to ${voiceChannel.name} (${voiceChannel.id}) in guild ${voiceChannel.guild.id}`);
+      connection.on(VoiceConnectionStatus.Disconnected, (oldState, newState) => {
+        console.warn('[voice] connection disconnected, attempting recovery');
+      });
+      return connection;
+    } catch (e) {
+      console.error('[voice] ensureConnected failed on first try:', e?.message || e, e?.stack || 'no stack');
+      try { connection.destroy(); } catch (er) {}
+      // Try one more time
+      try {
+        console.log('[voice] retrying join once more');
+        const conn2 = joinVoiceChannel({
+          channelId: voiceChannel.id,
+          guildId: voiceChannel.guild.id,
+          adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+          selfDeaf: true,
+        });
+        await entersState(conn2, VoiceConnectionStatus.Ready, 30_000);
+        console.log('[voice] connected on retry');
+        return conn2;
+      } catch (err2) {
+        console.error('[voice] retry failed:', err2?.message || err2, err2?.stack || 'no stack');
+        try { conn2?.destroy(); } catch (er) {}
+        throw err2;
+      }
+    }
   } catch (e) {
-    console.error('[voice] ensureConnected failed:', e?.message || e, e?.stack || 'no stack');
-    connection.destroy();
+    console.error('[voice] ensureConnected fatal error:', e?.message || e, e?.stack || 'no stack');
     throw e;
   }
-
-  return connection;
 }
 
 function setCurrentConnection(connection, voiceChannel) {
