@@ -1,0 +1,11 @@
+- [ ] Crear proyecto Node.js
+- [ ] Configurar dependencias y estructura (src/index.js)
+- [ ] Implementar comandos /play y /stop usando @discordjs/voice
+- [ ] Crear .env.example para RADIO_STREAM_URL
+- [ ] Instalar dependencias (npm install) y ejecutar (npm start)
+- [ ] Probar en un servidor de Discord
+- [ ] Ajustar RADIO_STREAM_URL según el stream real de la web
+- [ ] Consumir current song desde https://rtnmusicappbackend.onrender.com/radio y mostrarlo "EN TODO" 
+- [ ] Actualizar el mensaje/embeds SOLO cuando cambie la canción (evitar cambios cada 2s)
+- [ ] Implementar polling cada 2s para detectar cambio y evitar spam
+
