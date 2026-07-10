@@ -17,6 +17,7 @@ const { createSongPoller } = require('./songUpdater');
 const RADIO_STREAM_URL = process.env.RADIO_STREAM_URL;
 const RADIO_STREAM_USER_AGENT = process.env.RADIO_STREAM_USER_AGENT;
 const RADIO_CURRENT_SONG_ENDPOINT = process.env.RADIO_CURRENT_SONG_ENDPOINT || 'https://rtnmusicappbackend.onrender.com/radio';
+const RADIO_PLAYBACK_URL_OVERRIDE = process.env.RADIO_PLAYBACK_URL_OVERRIDE;
 const SONG_POLL_MS = Number(process.env.SONG_POLL_MS || 2000);
 
 if (!process.env.DISCORD_TOKEN) {
@@ -112,8 +113,18 @@ client.on('interactionCreate', async (interaction) => {
       // Si falla, intentamos otra configuración y además logueamos para saber el motivo.
       const streamUrl = (() => {
         try {
+          const override = RADIO_PLAYBACK_URL_OVERRIDE;
+          if (override) return override;
+
           const s = songPoller?.getLastSongObject?.();
-          return s?.audioUrl || RADIO_STREAM_URL;
+          // Backends sometimes return different keys.
+          return (
+            s?.audioUrl ||
+            s?.audio_url ||
+            s?.url ||
+            s?.streamUrl ||
+            RADIO_STREAM_URL
+          );
         } catch {
           return RADIO_STREAM_URL;
         }
