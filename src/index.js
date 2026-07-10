@@ -108,8 +108,17 @@ client.on('interactionCreate', async (interaction) => {
         resourceOptions.inputArgs = ['-headers', `User-Agent: ${RADIO_STREAM_USER_AGENT}\r\n`];
       }
 
-      const resource = createAudioResource(RADIO_STREAM_URL, resourceOptions);
+      // Algunas radios/streams en Render pueden abortar al crear el recurso.
+      // Intentamos una segunda variante (más tolerante) si falla.
+      let resource;
+      try {
+        resource = createAudioResource(RADIO_STREAM_URL, resourceOptions);
+      } catch (e) {
+        resourceOptions.inlineVolume = true;
+        resource = createAudioResource(RADIO_STREAM_URL, resourceOptions);
+      }
       player.play(resource);
+
 
       // Poll CURRENT SONG every SONG_POLL_MS and only update when it changes.
       if (!songPoller) {
