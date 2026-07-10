@@ -115,6 +115,10 @@ client.on('interactionCreate', async (interaction) => {
 
       const streamUrl = (() => {
         try {
+          // Test for Render: forzamos un mp3 directo si existe.
+          const testMp3 = process.env.RADIO_TEST_MP3_URL;
+          if (testMp3) return testMp3;
+
           const override = RADIO_PLAYBACK_URL_OVERRIDE;
           if (override) return override;
 
