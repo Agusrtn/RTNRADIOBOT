@@ -15,18 +15,16 @@ const {
 
 const { createSongPoller } = require('./songUpdater');
 
-const RADIO_STREAM_URL = process.env.RADIO_STREAM_URL;
+const RADIO_STREAM_URL = process.env.RADIO_STREAM_URL || null;
 const RADIO_STREAM_USER_AGENT = process.env.RADIO_STREAM_USER_AGENT;
 const RADIO_CURRENT_SONG_ENDPOINT = process.env.RADIO_CURRENT_SONG_ENDPOINT || 'https://rtnmusicappbackend.onrender.com/radio';
 const RADIO_PLAYBACK_URL_OVERRIDE = process.env.RADIO_PLAYBACK_URL_OVERRIDE;
-const RADIO_AUDIO_BASE_URL = process.env.RADIO_AUDIO_BASE_URL;
 const SONG_POLL_MS = Number(process.env.SONG_POLL_MS || 2000);
+const KEEPALIVE_URL = process.env.KEEPALIVE_URL || null;
+const KEEPALIVE_INTERVAL_MS = Number(process.env.KEEPALIVE_INTERVAL_MS || 5 * 60 * 1000);
 
 if (!process.env.DISCORD_TOKEN) {
   throw new Error('Missing DISCORD_TOKEN in .env');
-}
-if (!RADIO_STREAM_URL) {
-  throw new Error('Missing RADIO_STREAM_URL in .env (direct audio stream URL)');
 }
 
 // Render “Web Service” health/port binding
@@ -44,6 +42,13 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`HTTP server listening on port ${PORT}`);
 });
+
+if (KEEPALIVE_URL) {
+  void runKeepalivePing();
+  setInterval(() => {
+    void runKeepalivePing();
+  }, KEEPALIVE_INTERVAL_MS);
+}
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
@@ -68,6 +73,60 @@ function getNextUserVoiceChannel(interaction) {
   const member = interaction.member;
   if (!member || !member.voice || !member.voice.channel) return null;
   return member.voice.channel;
+}
+
+async function resolveInitialStreamUrl() {
+  try {
+    const testMp3 = process.env.RADIO_TEST_MP3_URL;
+    if (testMp3) return testMp3;
+
+    const override = RADIO_PLAYBACK_URL_OVERRIDE;
+    if (override) return override;
+
+    if (!RADIO_CURRENT_SONG_ENDPOINT) return null;
+
+    const res = await fetch(RADIO_CURRENT_SONG_ENDPOINT, {
+      headers: { Accept: 'application/json' },
+    });
+
+    if (!res.ok) {
+      console.warn('[play] initial fetch failed with status', res.status);
+      return null;
+    }
+
+    const data = await res.json();
+    const obj = data?.station?.currentSong ?? data?.currentSong ?? data?.current_song ?? data;
+    return (
+      obj?.audioUrl ||
+      obj?.audio_url ||
+      obj?.url ||
+      obj?.streamUrl ||
+      obj?.stream_url ||
+      data?.audioUrl ||
+      data?.audio_url ||
+      data?.url ||
+      data?.streamUrl ||
+      data?.stream_url ||
+      null
+    );
+  } catch (e) {
+    console.warn('[play] resolveInitialStreamUrl failed:', e?.message || e);
+    return null;
+  }
+}
+
+async function runKeepalivePing() {
+  if (!KEEPALIVE_URL) return;
+
+  try {
+    const res = await fetch(KEEPALIVE_URL, {
+      method: 'GET',
+      headers: { 'User-Agent': 'RTNRadioBot-Keepalive/1.0' },
+    });
+    console.log(`[keepalive] ${KEEPALIVE_URL} -> ${res.status}`);
+  } catch (e) {
+    console.warn('[keepalive] ping failed:', e?.message || e);
+  }
 }
 
 async function ensureConnected(voiceChannel) {
@@ -196,30 +255,29 @@ client.on('interactionCreate', async (interaction) => {
         resourceOptions.inputArgs = ['-headers', `User-Agent: ${RADIO_STREAM_USER_AGENT}\r\n`];
       }
 
+      const initialStreamUrl = await resolveInitialStreamUrl();
       const streamUrl = (() => {
         try {
-          // Test for Render: forzamos un mp3 directo si existe.
-          const testMp3 = process.env.RADIO_TEST_MP3_URL;
-          if (testMp3) return testMp3;
-
-          const override = RADIO_PLAYBACK_URL_OVERRIDE;
-          if (override) return override;
-
           const s = songPoller?.getLastSongObject?.();
 
-          // Preferimos audioUrl del endpoint /radio (cambia por canción).
-          // Si el campo no existe, usamos fallback.
           return (
+            initialStreamUrl ||
             s?.audioUrl ||
             s?.audio_url ||
             s?.url ||
             s?.streamUrl ||
-            RADIO_STREAM_URL
+            s?.stream_url ||
+            RADIO_STREAM_URL ||
+            null
           );
         } catch {
-          return RADIO_STREAM_URL;
+          return initialStreamUrl || RADIO_STREAM_URL || null;
         }
       })();
+
+      if (!streamUrl) {
+        throw new Error('No audio URL available. Set RADIO_TEST_MP3_URL, RADIO_PLAYBACK_URL_OVERRIDE, or ensure the backend returns audioUrl through RADIO_CURRENT_SONG_ENDPOINT.');
+      }
 
       console.log('[play] using streamUrl:', streamUrl);
       console.log('[play] streamResourceOptions:', streamResourceOptions);
