@@ -62,6 +62,22 @@ const client = new Client({
 
 const player = createAudioPlayer();
 
+client.on('error', (error) => {
+  console.error('[discord] client error:', error?.message || error);
+});
+
+client.on('shardError', (error) => {
+  console.error('[discord] shard error:', error?.message || error);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[process] unhandledRejection:', reason?.message || reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('[process] uncaughtException:', error?.message || error);
+});
+
 let currentSongMessage = null;
 let currentSongMessageChannel = null;
 let songPoller = null;
@@ -249,6 +265,14 @@ player.on('error', (err) => {
 
 client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
+});
+
+client.once('disconnect', () => {
+  console.warn('[discord] disconnected from gateway');
+});
+
+client.once('reconnecting', () => {
+  console.warn('[discord] reconnecting to gateway');
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -479,5 +503,10 @@ async function registerCommands() {
 
 registerCommands().catch((e) => console.warn('Command registration skipped/failed:', e?.message || e));
 
-client.login(DISCORD_TOKEN);
+console.log('[discord] attempting login...');
+client.login(DISCORD_TOKEN).catch((error) => {
+  console.error('[discord] login failed:', error?.message || error);
+  console.error('[discord] check that DISCORD_TOKEN (or BOT_TOKEN/TOKEN) is set correctly in Render.');
+  process.exit(1);
+});
 
