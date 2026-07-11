@@ -1,4 +1,5 @@
-require('dotenv').config();
+const path = require('path');
+const dotenvResult = require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 
 const http = require('http');
 
@@ -26,8 +27,11 @@ const KEEPALIVE_URL = process.env.KEEPALIVE_URL || null;
 const KEEPALIVE_INTERVAL_MS = Number(process.env.KEEPALIVE_INTERVAL_MS || 5 * 60 * 1000);
 
 if (!DISCORD_TOKEN) {
-  throw new Error('Missing bot token. Set DISCORD_TOKEN (or BOT_TOKEN/TOKEN) in your .env/Render environment.');
+  throw new Error('Missing bot token. Set DISCORD_TOKEN (or BOT_TOKEN/TOKEN) in your .env file or Render environment. On Windows PowerShell use: $env:DISCORD_TOKEN="your_token"');
 }
+
+console.log(`[env] .env loaded: ${!dotenvResult.error}`);
+console.log('[env] token configured:', Boolean(DISCORD_TOKEN));
 
 // Render “Web Service” health/port binding
 // Your Discord bot does not need HTTP, but Render requires a bound port for Web Service.
