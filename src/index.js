@@ -30,9 +30,11 @@ const RADIO_PLAYBACK_URL_OVERRIDE = process.env.RADIO_PLAYBACK_URL_OVERRIDE;
 const SONG_POLL_MS = Number(process.env.SONG_POLL_MS || 2000);
 const KEEPALIVE_URL = process.env.KEEPALIVE_URL || null;
 const KEEPALIVE_INTERVAL_MS = Number(process.env.KEEPALIVE_INTERVAL_MS || 5 * 60 * 1000);
+const VOICE_ENABLED = process.env.DISCORD_VOICE_ENABLED !== 'false' && !process.env.RENDER;
 
 console.log(`[env] .env loaded: ${!dotenvResult.error}`);
 console.log('[env] token configured:', Boolean(DISCORD_TOKEN));
+console.log('[env] voice enabled:', VOICE_ENABLED);
 
 // Render “Web Service” health/port binding
 // Your Discord bot does not need HTTP, but Render requires a bound port for Web Service.
@@ -96,6 +98,8 @@ let lastSong = null;
 let currentVoiceChannel = null;
 let currentVoiceConnection = null;
 let currentPlayingUrl = null;
+let voiceReconnectInProgress = false;
+let lastVoiceJoinError = null;
 
 // small helper
 function sleep(ms) {
@@ -176,7 +180,12 @@ async function runKeepalivePing() {
 }
 
 async function ensureConnected(voiceChannel) {
-  // Reuse existing connection if present
+  if (!VOICE_ENABLED) {
+    const message = 'Discord voice is disabled on this host. Use a VPS/host with UDP support to play audio.';
+    console.warn('[voice] unsupported host:', message);
+    throw new Error(message);
+  }
+
   try {
     const existing = getVoiceConnection(voiceChannel.guild.id);
     if (existing) {
@@ -190,7 +199,6 @@ async function ensureConnected(voiceChannel) {
       }
     }
 
-    // Check permissions before attempting to join
     const perms = voiceChannel.permissionsFor ? voiceChannel.permissionsFor(client.user) : null;
     if (!perms || !perms.has(PermissionsBitField.Flags.Connect)) {
       const msg = 'Missing Connect permission for bot in channel';
@@ -206,43 +214,26 @@ async function ensureConnected(voiceChannel) {
     });
 
     try {
-      // Wait longer and allow an initial reconnect attempt
       await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
       console.log(`[voice] connected to ${voiceChannel.name} (${voiceChannel.id}) in guild ${voiceChannel.guild.id}`);
-      connection.on(VoiceConnectionStatus.Disconnected, (oldState, newState) => {
+      lastVoiceJoinError = null;
+      connection.on(VoiceConnectionStatus.Disconnected, () => {
         console.warn('[voice] connection disconnected, attempting recovery');
       });
       return connection;
     } catch (e) {
-      console.error('[voice] ensureConnected failed on first try:', e?.message || e, e?.stack || 'no stack');
+      const message = e?.message || String(e);
+      console.error('[voice] ensureConnected failed on first try:', message);
+      if (/aborted|timed out|timeout|voice/i.test(message)) {
+        lastVoiceJoinError = message;
+        console.error('[voice] this usually means Discord voice traffic is being blocked or timed out by the host/network. On Render, a VPS or host with UDP support is usually required.');
+      }
       try {
         if (connection && typeof connection.destroy === 'function') connection.destroy();
       } catch (er) {
         console.warn('[voice] destroy failed (ignored):', er?.message || er);
       }
-      // Try one more time after a short wait
-      try {
-        console.log('[voice] retrying join once more after 3s');
-        await sleep(3000);
-        let conn2 = null;
-        try {
-          conn2 = joinVoiceChannel({
-            channelId: voiceChannel.id,
-            guildId: voiceChannel.guild.id,
-            adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-            selfDeaf: true,
-          });
-          await entersState(conn2, VoiceConnectionStatus.Ready, 30_000);
-          console.log('[voice] connected on retry');
-          return conn2;
-        } catch (err2) {
-          console.error('[voice] retry failed:', err2?.message || err2, err2?.stack || 'no stack');
-          try { if (conn2 && typeof conn2.destroy === 'function') conn2.destroy(); } catch (er) { console.warn('[voice] destroy failed (ignored):', er?.message || er); }
-          throw err2;
-        }
-      } catch (finalErr) {
-        throw finalErr;
-      }
+      throw e;
     }
   } catch (e) {
     console.error('[voice] ensureConnected fatal error:', e?.message || e, e?.stack || 'no stack');
@@ -472,7 +463,9 @@ client.on('interactionCreate', async (interaction) => {
 
       return interaction.editReply({ content: `Reproduciendo radio en: **${voiceChannel.name}**` });
     } catch (e) {
-      return interaction.editReply({ content: `No pude iniciar la reproducción. Revisa RADIO_STREAM_URL. Error: ${e?.message || e}` });
+      const voiceHint = lastVoiceJoinError ? ' El host parece estar bloqueando o demorando la conexión de voz de Discord. Si estás en Render, necesitas un VPS/host con soporte UDP para voz.' : '';
+      const fallbackMessage = e?.message?.includes('voice is disabled') ? ' La reproducción de voz no está soportada en este host. Mueve el bot a un VPS con soporte UDP para que funcione.' : '';
+      return interaction.editReply({ content: `No pude iniciar la reproducción. Revisa RADIO_STREAM_URL. Error: ${e?.message || e}${voiceHint}${fallbackMessage}` });
     }
   }
 
@@ -501,38 +494,26 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     if (!oldState || !oldState.member) return;
     if (oldState.member.id !== client.user.id) return;
 
-    // Bot was in a channel and now is not -> try to rejoin
+    if (voiceReconnectInProgress) return;
+
     if (oldState.channel && !newState.channel) {
-      const voiceChannel = oldState.channel;
-      // Try a few times with exponential backoff
-      const maxAttempts = 4;
-      let attempt = 0;
-      while (attempt < maxAttempts) {
-        attempt += 1;
-        try {
-          console.log('[voiceStateUpdate] attempt', attempt, 'to rejoin', voiceChannel.name);
-          const connection = await ensureConnected(voiceChannel);
-          connection.subscribe(player);
-          setCurrentConnection(connection, voiceChannel);
-          console.log('[voiceStateUpdate] rejoin successful on attempt', attempt);
-          break;
-        } catch (e) {
-          console.warn('[voiceStateUpdate] rejoin attempt', attempt, 'failed:', e?.message || e);
-          console.warn(e?.stack || 'no stack');
-          if (attempt >= maxAttempts) {
-            console.error('[voiceStateUpdate] all rejoin attempts failed');
-            break;
-          }
-          // backoff: 2s, 4s, 8s...
-          const wait = 2000 * Math.pow(2, attempt - 1);
-          console.log('[voiceStateUpdate] waiting', wait, 'ms before next attempt');
-          // eslint-disable-next-line no-await-in-loop
-          await sleep(wait);
-        }
+      voiceReconnectInProgress = true;
+      try {
+        const voiceChannel = oldState.channel;
+        console.log('[voiceStateUpdate] rejoin requested for', voiceChannel.name);
+        const connection = await ensureConnected(voiceChannel);
+        connection.subscribe(player);
+        setCurrentConnection(connection, voiceChannel);
+        console.log('[voiceStateUpdate] rejoin successful');
+      } catch (e) {
+        console.warn('[voiceStateUpdate] rejoin failed:', e?.message || e);
+      } finally {
+        voiceReconnectInProgress = false;
       }
     }
   } catch (e) {
     console.error('[voiceStateUpdate] unexpected error', e?.message || e, e?.stack || 'no stack');
+    voiceReconnectInProgress = false;
   }
 });
 
