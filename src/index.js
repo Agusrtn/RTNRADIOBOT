@@ -17,7 +17,7 @@ const { createSongPoller } = require('./songUpdater');
 
 const RADIO_STREAM_URL = process.env.RADIO_STREAM_URL || null;
 const RADIO_STREAM_USER_AGENT = process.env.RADIO_STREAM_USER_AGENT;
-const RADIO_CURRENT_SONG_ENDPOINT = process.env.RADIO_CURRENT_SONG_ENDPOINT || 'https://rtnmusicappbackend.onrender.com/radio';
+const RADIO_CURRENT_SONG_ENDPOINT = process.env.RADIO_CURRENT_SONG_ENDPOINT || 'https://rtn-music.vercel.app/api/radio-stream?format=json';
 const RADIO_PLAYBACK_URL_OVERRIDE = process.env.RADIO_PLAYBACK_URL_OVERRIDE;
 const SONG_POLL_MS = Number(process.env.SONG_POLL_MS || 2000);
 const KEEPALIVE_URL = process.env.KEEPALIVE_URL || null;
@@ -96,7 +96,8 @@ async function resolveInitialStreamUrl() {
 
     const data = await res.json();
     const obj = data?.station?.currentSong ?? data?.currentSong ?? data?.current_song ?? data;
-    return (
+
+    const directUrl =
       obj?.audioUrl ||
       obj?.audio_url ||
       obj?.url ||
@@ -107,8 +108,20 @@ async function resolveInitialStreamUrl() {
       data?.url ||
       data?.streamUrl ||
       data?.stream_url ||
-      null
-    );
+      data?.stream ||
+      data?.stream_url ||
+      data?.radioUrl ||
+      data?.radio_url ||
+      null;
+
+    if (directUrl) return directUrl;
+
+    if (typeof data === 'string') return data;
+
+    if (data?.playlist?.url) return data.playlist.url;
+    if (data?.m3u) return data.m3u;
+
+    return null;
   } catch (e) {
     console.warn('[play] resolveInitialStreamUrl failed:', e?.message || e);
     return null;
