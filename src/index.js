@@ -16,8 +16,8 @@ const {
 
 const { createSongPoller } = require('./songUpdater');
 
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || process.env.TOKEN || null;
-const CLIENT_ID = process.env.CLIENT_ID || process.env.APPLICATION_ID || process.env.APP_ID || null;
+const DISCORD_TOKEN = String(process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || process.env.TOKEN || '').trim();
+const CLIENT_ID = String(process.env.CLIENT_ID || process.env.APPLICATION_ID || process.env.APP_ID || '').trim();
 const RADIO_STREAM_URL = process.env.RADIO_STREAM_URL || null;
 const RADIO_STREAM_USER_AGENT = process.env.RADIO_STREAM_USER_AGENT;
 const RADIO_CURRENT_SONG_ENDPOINT = process.env.RADIO_CURRENT_SONG_ENDPOINT || 'https://rtn-music.vercel.app/api/radio-stream?format=json';
@@ -68,6 +68,16 @@ client.on('error', (error) => {
 
 client.on('shardError', (error) => {
   console.error('[discord] shard error:', error?.message || error);
+});
+
+client.on('warn', (message) => {
+  console.warn('[discord] warn:', message);
+});
+
+client.on('debug', (message) => {
+  if (message && /gateway|rate limit|heartbeat|session|token/i.test(message)) {
+    console.log('[discord] debug:', message);
+  }
 });
 
 process.on('unhandledRejection', (reason) => {
@@ -263,7 +273,17 @@ player.on('error', (err) => {
   console.error('[player] error:', err?.message || err, err?.stack || 'no stack');
 });
 
+let loginReady = false;
+const loginTimeout = setTimeout(() => {
+  if (!loginReady) {
+    console.error('[discord] login did not reach ready state within 30s. Check token, network, and Discord gateway access.');
+    process.exit(1);
+  }
+}, 30_000);
+
 client.once('ready', () => {
+  loginReady = true;
+  clearTimeout(loginTimeout);
   console.log(`Logged in as ${client.user.tag}`);
 });
 
@@ -501,10 +521,10 @@ async function registerCommands() {
   console.log('Commands registered');
 }
 
-registerCommands().catch((e) => console.warn('Command registration skipped/failed:', e?.message || e));
-
 console.log('[discord] attempting login...');
-client.login(DISCORD_TOKEN).catch((error) => {
+client.login(DISCORD_TOKEN).then(() => {
+  console.log('[discord] login promise resolved');
+}).catch((error) => {
   console.error('[discord] login failed:', error?.message || error);
   console.error('[discord] check that DISCORD_TOKEN (or BOT_TOKEN/TOKEN) is set correctly in Render.');
   process.exit(1);
