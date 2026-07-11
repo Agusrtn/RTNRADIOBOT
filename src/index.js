@@ -16,8 +16,13 @@ const {
 
 const { createSongPoller } = require('./songUpdater');
 
-const DISCORD_TOKEN = String(process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || process.env.TOKEN || '').trim();
-const CLIENT_ID = String(process.env.CLIENT_ID || process.env.APPLICATION_ID || process.env.APP_ID || '').trim();
+function normalizeToken(value) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/^['"]+|['"]+$/g, '').trim().replace(/^Bot\s+/i, '').replace(/^Bearer\s+/i, '');
+}
+
+const DISCORD_TOKEN = normalizeToken(process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || process.env.TOKEN || '');
+const CLIENT_ID = normalizeToken(process.env.CLIENT_ID || process.env.APPLICATION_ID || process.env.APP_ID || '');
 const RADIO_STREAM_URL = process.env.RADIO_STREAM_URL || null;
 const RADIO_STREAM_USER_AGENT = process.env.RADIO_STREAM_USER_AGENT;
 const RADIO_CURRENT_SONG_ENDPOINT = process.env.RADIO_CURRENT_SONG_ENDPOINT || 'https://rtn-music.vercel.app/api/radio-stream?format=json';
@@ -25,10 +30,6 @@ const RADIO_PLAYBACK_URL_OVERRIDE = process.env.RADIO_PLAYBACK_URL_OVERRIDE;
 const SONG_POLL_MS = Number(process.env.SONG_POLL_MS || 2000);
 const KEEPALIVE_URL = process.env.KEEPALIVE_URL || null;
 const KEEPALIVE_INTERVAL_MS = Number(process.env.KEEPALIVE_INTERVAL_MS || 5 * 60 * 1000);
-
-if (!DISCORD_TOKEN) {
-  throw new Error('Missing bot token. Set DISCORD_TOKEN (or BOT_TOKEN/TOKEN) in your .env file or Render environment. On Windows PowerShell use: $env:DISCORD_TOKEN="your_token"');
-}
 
 console.log(`[env] .env loaded: ${!dotenvResult.error}`);
 console.log('[env] token configured:', Boolean(DISCORD_TOKEN));
@@ -274,17 +275,57 @@ player.on('error', (err) => {
 });
 
 let loginReady = false;
-const loginTimeout = setTimeout(() => {
-  if (!loginReady) {
-    console.error('[discord] login did not reach ready state within 30s. Check token, network, and Discord gateway access.');
-    process.exit(1);
-  }
-}, 30_000);
+let loginRetryTimer = null;
+let loginInProgress = false;
+let loginAttempts = 0;
 
-client.once('ready', () => {
+function clearLoginRetryTimer() {
+  if (loginRetryTimer) {
+    clearTimeout(loginRetryTimer);
+    loginRetryTimer = null;
+  }
+}
+
+async function loginToDiscord() {
+  if (loginInProgress) return;
+  loginInProgress = true;
+
+  if (!DISCORD_TOKEN) {
+    console.error('[discord] missing token. Set DISCORD_TOKEN (or BOT_TOKEN/TOKEN) in your .env file or Render environment.');
+    loginInProgress = false;
+    loginRetryTimer = setTimeout(() => {
+      void loginToDiscord();
+    }, 30_000);
+    return;
+  }
+
+  try {
+    loginAttempts += 1;
+    console.log(`[discord] attempting login (attempt ${loginAttempts})...`);
+    await client.login(DISCORD_TOKEN);
+    console.log('[discord] login promise resolved');
+  } catch (error) {
+    console.error('[discord] login failed:', error?.message || error);
+    console.error('[discord] retrying in 15s...');
+    loginRetryTimer = setTimeout(() => {
+      void loginToDiscord();
+    }, 15_000);
+  } finally {
+    loginInProgress = false;
+  }
+}
+
+client.once('ready', async () => {
   loginReady = true;
-  clearTimeout(loginTimeout);
+  clearLoginRetryTimer();
   console.log(`Logged in as ${client.user.tag}`);
+
+  try {
+    await registerCommands();
+    console.log('[discord] slash commands synced');
+  } catch (error) {
+    console.warn('[discord] command registration skipped/failed:', error?.message || error);
+  }
 });
 
 client.once('disconnect', () => {
@@ -521,12 +562,5 @@ async function registerCommands() {
   console.log('Commands registered');
 }
 
-console.log('[discord] attempting login...');
-client.login(DISCORD_TOKEN).then(() => {
-  console.log('[discord] login promise resolved');
-}).catch((error) => {
-  console.error('[discord] login failed:', error?.message || error);
-  console.error('[discord] check that DISCORD_TOKEN (or BOT_TOKEN/TOKEN) is set correctly in Render.');
-  process.exit(1);
-});
+void loginToDiscord();
 
