@@ -15,6 +15,8 @@ const {
 
 const { createSongPoller } = require('./songUpdater');
 
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN || process.env.BOT_TOKEN || process.env.TOKEN || null;
+const CLIENT_ID = process.env.CLIENT_ID || process.env.APPLICATION_ID || process.env.APP_ID || null;
 const RADIO_STREAM_URL = process.env.RADIO_STREAM_URL || null;
 const RADIO_STREAM_USER_AGENT = process.env.RADIO_STREAM_USER_AGENT;
 const RADIO_CURRENT_SONG_ENDPOINT = process.env.RADIO_CURRENT_SONG_ENDPOINT || 'https://rtn-music.vercel.app/api/radio-stream?format=json';
@@ -23,8 +25,8 @@ const SONG_POLL_MS = Number(process.env.SONG_POLL_MS || 2000);
 const KEEPALIVE_URL = process.env.KEEPALIVE_URL || null;
 const KEEPALIVE_INTERVAL_MS = Number(process.env.KEEPALIVE_INTERVAL_MS || 5 * 60 * 1000);
 
-if (!process.env.DISCORD_TOKEN) {
-  throw new Error('Missing DISCORD_TOKEN in .env');
+if (!DISCORD_TOKEN) {
+  throw new Error('Missing bot token. Set DISCORD_TOKEN (or BOT_TOKEN/TOKEN) in your .env/Render environment.');
 }
 
 // Render “Web Service” health/port binding
@@ -448,10 +450,10 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
 // Register commands programmatically (simple, best-effort)
 async function registerCommands() {
   const { REST, Routes } = require('discord.js');
-  const token = process.env.DISCORD_TOKEN;
-  const clientId = process.env.CLIENT_ID;
+  const token = DISCORD_TOKEN;
+  const clientId = CLIENT_ID;
 
-  if (!clientId) return;
+  if (!clientId || !token) return;
 
   const rest = new REST({ version: '10' }).setToken(token);
 
@@ -473,5 +475,5 @@ async function registerCommands() {
 
 registerCommands().catch((e) => console.warn('Command registration skipped/failed:', e?.message || e));
 
-client.login(process.env.DISCORD_TOKEN);
+client.login(DISCORD_TOKEN);
 
